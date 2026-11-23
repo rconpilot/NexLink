@@ -59,7 +59,7 @@ needs right-click → Run as administrator.) With "Start with Windows" on,
 expect a UAC prompt at each logon — a Task Scheduler entry would avoid
 that, and is a later improvement.
 
-**Download:** the latest release (v0.2.1) — installer + APK: https://github.com/rconpilot/NexLink/releases/tag/v0.2.1
+**Download:** the latest release (v0.3.1) — installer + APK: https://github.com/rconpilot/NexLink/releases/tag/v0.3.1
 
 ## Repository layout
 
