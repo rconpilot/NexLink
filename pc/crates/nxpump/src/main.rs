@@ -6,18 +6,41 @@
 //!
 //! Usage:
 //!   nxpump --tun nx0 --addr 10.77.0.2 --gateway 10.77.0.1 --link 127.0.0.1:47777
+//!
+//! Linux-only (it binds a real TUN device); on other platforms the
+//! binary is a stub that says so, which keeps the workspace's Windows
+//! cross-check green.
 
-use std::fs::{File, OpenOptions};
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("nxpump is a Linux-only development harness (it binds a /dev/net/tun device).");
+    std::process::exit(2);
+}
+
+#[cfg(target_os = "linux")]
+fn main() {
+    linux_main();
+}
+
+#[cfg(target_os = "linux")]
 use std::io::{Read, Write};
+#[cfg(target_os = "linux")]
 use std::net::TcpStream;
+#[cfg(target_os = "linux")]
 use std::process::Command;
+#[cfg(target_os = "linux")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "linux")]
 use std::sync::mpsc::channel;
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
+#[cfg(target_os = "linux")]
 use nxcore::engine::{client_handshake, Engine, TrafficCounters};
+#[cfg(target_os = "linux")]
 use nxcore::Ipv4Address;
 
+#[cfg(target_os = "linux")]
 struct Args {
     tun: String,
     addr: String,
@@ -25,6 +48,7 @@ struct Args {
     link: String,
 }
 
+#[cfg(target_os = "linux")]
 fn parse_args() -> Args {
     let mut a = Args { tun: "nx0".into(), addr: "10.77.0.2".into(), gateway: "10.77.0.1".into(), link: "127.0.0.1:47777".into() };
     let args: Vec<String> = std::env::args().collect();
@@ -41,23 +65,10 @@ fn parse_args() -> Args {
     a
 }
 
-fn create_tun(name: &str) -> std::io::Result<File> {
-    let file = OpenOptions::new().read(true).write(true).open("/dev/net/tun")?;
-    // struct ifreq: 16-byte name, then u16 flags.
-    let mut ifr = [0u8; 40];
-    let name_bytes = name.as_bytes();
-    ifr[..name_bytes.len()].copy_from_slice(name_bytes);
-    let flags: u16 = 0x0001 /* IFF_TUN */ | 0x1000 /* IFF_NO_PI */;
-    ifr[16..18].copy_from_slice(&flags.to_ne_bytes());
-    let ret = unsafe { libc::ioctl(file.as_raw_fd(), libc::TUNSETIFF, ifr.as_mut_ptr() as *mut libc::c_void) };
-    if ret < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(file)
-}
-
-use std::os::unix::io::AsRawFd;
-
+// TUN creation itself lives in nxtun::device::create_tun — the same
+// code the tray app's Linux backend uses — so the harness and the
+// product can never drift apart on the ioctl details.
+#[cfg(target_os = "linux")]
 fn run_ip(args: &[&str]) {
     let status = Command::new("ip").args(args).status().expect("run ip");
     if !status.success() {
@@ -66,10 +77,11 @@ fn run_ip(args: &[&str]) {
     }
 }
 
-fn main() {
+#[cfg(target_os = "linux")]
+fn linux_main() {
     let args = parse_args();
 
-    let tun = create_tun(&args.tun).unwrap_or_else(|e| {
+    let (tun, _assigned) = nxtun::device::create_tun(&args.tun).unwrap_or_else(|e| {
         eprintln!("nxpump: cannot create TUN {}: {e} (need root / CAP_NET_ADMIN)", args.tun);
         std::process::exit(1);
     });

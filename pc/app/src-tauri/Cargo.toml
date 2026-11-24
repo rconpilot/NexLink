@@ -3,7 +3,7 @@ name = "nexlink-app"
 version = "0.3.1"
 edition = "2021"
 license = "MIT"
-description = "NexLink for Windows: a tray-only app (settings window + Connect) built on the nxcore engine."
+description = "NexLink PC tray app (settings window + Connect) built on the nxcore engine — Wintun backend on Windows, TUN backend on Linux."
 
 # Standalone crate: intentionally not a member of the pc/ workspace so the
 # core stays fast to build and test on its own.
@@ -19,6 +19,12 @@ nxcore = { path = "../../crates/nxcore" }
 # wintun.dll next to the exe.
 [target.'cfg(windows)'.dependencies]
 wintun = "0.5"
+
+# Linux only: the platform layer (TUN adapter backend + route/DNS
+# management) from the pc/ workspace, behind the same API as the
+# Windows backend + routes modules.
+[target.'cfg(target_os = "linux")'.dependencies]
+nxtun = { path = "../../crates/nxtun" }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

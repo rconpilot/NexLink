@@ -1,0 +1,1 @@
+{"$schema":"https://schema.tauri.app/config/2","bundle":{"linux":{"appimage":{},"deb":{"depends":["iproute2"]}},"resources":[],"targets":["deb","appimage"]}}

@@ -1,14 +1,15 @@
-//! NexLink for Windows — a tray-only app.
+//! NexLink PC app — a tray-only app (Windows and Linux builds).
 //!
-//! The app lives in the notification area ("Show hidden icons"). Its one
-//! small window holds the transport settings and the Connect button.
-//! Connecting is always manual — there is no auto-retry anywhere, by design.
+//! The app lives in the tray / notification area. Its one small window
+//! holds the transport settings and the Connect button. Connecting is
+//! always manual — there is no auto-retry anywhere, by design.
 //!
 //! Connect does the real thing now (backlog item 2): after the phone
-//! check (armed), it opens the Wintun adapter, installs the tunnel
-//! routes, and runs the nxcore engine on its own thread, so all PC
-//! traffic flows through the phone. Disconnect — or quitting the app —
-//! stops the engine, removes the routes and stops the adapter.
+//! check (armed), it opens the virtual adapter (Wintun on Windows, a
+//! TUN device on Linux), installs the tunnel routes, and runs the
+//! nxcore engine on its own thread, so all PC traffic flows through
+//! the phone. Disconnect — or quitting the app — stops the engine,
+//! removes the routes and stops the adapter.
 //!
 //! Since v0.3.0, "Connected" is earned, not asserted: the engine first
 //! pushes a real DNS query and a real TCP open through the tunnel and
@@ -16,11 +17,13 @@
 //! routes are bound to the adapter and read back after install, and
 //! the adb forward is supervised for the life of a USB tunnel.
 //!
-//! The app must run elevated (administrator): creating the adapter and
-//! changing routes need it. The installed app elevates itself — the
+//! The app must run privileged: creating the adapter and changing
+//! routes need it. On Windows the installed app elevates itself — the
 //! manifest (backlog item 3, `windows-app-manifest.xml`) asks Windows
-//! for administrator rights at launch. A hand-built exe still needs
-//! right-click → Run as administrator.
+//! for administrator rights at launch; a hand-built exe still needs
+//! right-click → Run as administrator. On Linux the app must be
+//! started as root (e.g. via sudo) — there is no self-elevation yet,
+//! and Connect reports it plainly when it is missing.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -36,6 +39,28 @@ mod routes;
 /// "Start with Windows" via the HKCU Run key (item 3).
 #[cfg(windows)]
 mod autostart;
+
+/// "Start at login" on Linux via an XDG autostart entry (item 3's
+/// counterpart).
+#[cfg(target_os = "linux")]
+mod autostart_linux;
+
+/// The platform adapter backend under one name: the Wintun backend on
+/// Windows, the `nxtun` TUN backend on Linux. Both export `Device`,
+/// `Channels` and the addressing constants with identical shapes, so
+/// the tunnel code below is written once against either.
+#[cfg(windows)]
+use wintun_backend as adapter;
+#[cfg(target_os = "linux")]
+use nxtun as adapter;
+
+/// The platform route + DNS manager under one name. Both expose
+/// `install(transport, phone_ip)`, `TunnelRoutes::remove` and
+/// `is_elevated` with the same signatures.
+#[cfg(windows)]
+use routes as net_routes;
+#[cfg(target_os = "linux")]
+use nxtun::routes as net_routes;
 
 /// Pure network helpers, unit-tested on every platform. Only used by
 /// the Windows routes module — hence the allow on other platforms.
@@ -58,22 +83,42 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use nxcore::engine::{client_handshake, TrafficCounters};
 use nxcore::proto::DEFAULT_PORT;
 
+/// The per-user state directory the log lives in: `%APPDATA%` on
+/// Windows, `$XDG_STATE_HOME` (default `~/.local/state`) on Linux,
+/// the temp directory as a last resort on either.
+fn state_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return PathBuf::from(appdata);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
+            return PathBuf::from(xdg);
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(".local").join("state");
+        }
+    }
+    std::env::temp_dir()
+}
+
 /// Always-on diagnostics: point the nxcore log at
-/// `%APPDATA%/NexLink/nexlink.log` so every run — successful or not —
-/// leaves a trace on the user's PC (v0.2.1 logged only to stderr
-/// behind an env var, so its failing run left nothing to diagnose).
-/// `NXLOG` still adds stderr output on top, for development.
+/// `<state dir>/NexLink/nexlink.log` so every run — successful or
+/// not — leaves a trace on the user's PC (v0.2.1 logged only to
+/// stderr behind an env var, so its failing run left nothing to
+/// diagnose). `NXLOG` still adds stderr output on top, for
+/// development.
 fn init_logging() {
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let path = base.join("NexLink").join("nexlink.log");
+    let path = state_dir().join("NexLink").join("nexlink.log");
     let _ = nxcore::set_log_file(&path);
     nxcore::nxlog(format!("NexLink {} starting", env!("CARGO_PKG_VERSION")));
 }
 
 /// One live tunnel: the engine thread plus the flag that stops it.
-/// The thread owns the engine, the Wintun device and the routes, and
+/// The thread owns the engine, the adapter device and the routes, and
 /// tears them all down when the engine exits — whether it was asked to
 /// stop or the link died on its own.
 struct ActiveTunnel {
@@ -126,14 +171,29 @@ impl TunnelState {
     }
 }
 
-/// Find adb: the shipped bundle first (the installer puts adb.exe and
-/// its DLLs in `resources/` next to the exe — same layout as
-/// wintun.dll), then next to the exe itself (hand-built runs), then on
+/// The adb binary's locations next to the exe: the shipped bundle
+/// first (the Windows installer puts adb.exe and its DLLs in
+/// `resources/` next to the exe — same layout as wintun.dll; a Linux
+/// package would put `adb` in the same places), then next to the exe
+/// itself (hand-built runs).
+#[cfg(windows)]
+fn adb_candidates(dir: &std::path::Path) -> [PathBuf; 2] {
+    [dir.join("adb.exe"), dir.join("resources").join("adb.exe")]
+}
+
+/// See the Windows version. (No Linux bundle ships adb yet, so on
+/// Linux this normally falls through to PATH.)
+#[cfg(not(windows))]
+fn adb_candidates(dir: &std::path::Path) -> [PathBuf; 2] {
+    [dir.join("adb"), dir.join("resources").join("adb")]
+}
+
+/// Find adb: the bundled copy first (see [`adb_candidates`]), then on
 /// PATH (a developer's own platform-tools).
 fn adb_command() -> Command {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            for candidate in [dir.join("adb.exe"), dir.join("resources").join("adb.exe")] {
+            for candidate in adb_candidates(dir) {
                 if candidate.exists() {
                     return Command::new(candidate);
                 }
@@ -179,6 +239,16 @@ fn adb_forward_active() -> Option<bool> {
     Some(netutil::adb_forward_present(&text, DEFAULT_PORT))
 }
 
+/// The name this build introduces itself with in the NXLP handshake
+/// (the phone displays it in its connection state).
+const CLIENT_NAME: &str = if cfg!(windows) {
+    "NexLink for Windows"
+} else if cfg!(target_os = "linux") {
+    "NexLink for Linux"
+} else {
+    "NexLink"
+};
+
 /// Reach the phone and do the NXLP handshake. Returns the handshaken
 /// link stream (kept open — the engine takes it over), the phone's
 /// hello, and the phone's IP on Wi-Fi (needed for the /32 host route).
@@ -217,7 +287,7 @@ fn reach_phone(
         )
     })?;
 
-    let hello = client_handshake(&mut stream, "NexLink for Windows")
+    let hello = client_handshake(&mut stream, CLIENT_NAME)
         .map_err(|e| format!("The phone answered but the handshake failed: {e}"))?;
 
     if !hello.armed {
@@ -233,8 +303,8 @@ fn emit_stage(app: &tauri::AppHandle, stage: &str) {
     let _ = app.emit("connect-stage", stage);
 }
 
-/// The Connect button: reach the phone, then (Windows) start the real
-/// tunnel. Runs on a blocking thread — the handshake and the adapter
+/// The Connect button: reach the phone, then start the real tunnel.
+/// Runs on a blocking thread — the handshake and the adapter
 /// setup both do blocking I/O.
 #[tauri::command]
 async fn connect(app: tauri::AppHandle, transport: String, address: String) -> Result<String, String> {
@@ -263,15 +333,15 @@ fn connect_blocking(
 
     let (link, hello, phone_ip) = reach_phone(transport, address)?;
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         start_tunnel(app, state, link, hello, transport, phone_ip)
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (app, link, phone_ip);
         Err(format!(
-            "Phone found: {} — armed and ready. But the tunnel only runs on the Windows build of NexLink; this build can only check the phone.",
+            "Phone found: {} — armed and ready. But the tunnel only runs on the Windows and Linux builds of NexLink; this build can only check the phone.",
             hello.phone_name
         ))
     }
@@ -287,7 +357,20 @@ fn connect_blocking(
 /// "Connected" is verified, never assumed. A failed probe aborts the
 /// connect with the probe's named stage error, and the engine thread
 /// tears the tunnel down itself.
+/// Why Connect cannot proceed without privileges, in the platform's
+/// own terms.
 #[cfg(windows)]
+fn elevation_hint() -> String {
+    "NexLink must run as administrator to create the virtual adapter and add routes. Right-click NexLink → Run as administrator, then press Connect again.".to_string()
+}
+
+/// See the Windows version.
+#[cfg(target_os = "linux")]
+fn elevation_hint() -> String {
+    "NexLink must run as root to create the TUN device and add routes. Start it with sudo, then press Connect again.".to_string()
+}
+
+#[cfg(any(windows, target_os = "linux"))]
 fn start_tunnel(
     app: &tauri::AppHandle,
     state: &TunnelState,
@@ -296,18 +379,18 @@ fn start_tunnel(
     transport: &str,
     phone_ip: Option<Ipv4Addr>,
 ) -> Result<String, String> {
+    use adapter::{Device, GATEWAY_ADDRESS};
     use nxcore::engine::{Engine, ProbeStage};
     use nxcore::Ipv4Address;
-    use wintun_backend::{WintunDevice, GATEWAY_ADDRESS};
 
-    if !routes::is_elevated() {
-        return Err("NexLink must run as administrator to create the virtual adapter and add routes. Right-click NexLink → Run as administrator, then press Connect again.".to_string());
+    if !net_routes::is_elevated() {
+        return Err(elevation_hint());
     }
 
     emit_stage(app, "Opening the virtual adapter…");
-    let (device, channels) = WintunDevice::open()?;
+    let (device, channels) = Device::open()?;
     emit_stage(app, "Installing routes…");
-    let tunnel_routes = match routes::install(transport, phone_ip) {
+    let tunnel_routes = match net_routes::install(transport, phone_ip) {
         Ok(r) => r,
         Err(e) => {
             device.stop();
@@ -484,21 +567,26 @@ fn tunnel_status(state: tauri::State<TunnelState>) -> String {
     }
 }
 
-/// The "Start with Windows" checkbox: is the exe in the HKCU Run key?
-/// (Windows only — the checkbox stays off on other builds.)
+/// The autostart checkbox: is the exe registered to start at login?
+/// (HKCU Run key on Windows, XDG autostart entry on Linux; the
+/// checkbox errors on other builds.)
 #[tauri::command]
 fn get_autostart() -> Result<bool, String> {
     #[cfg(windows)]
     {
         autostart::is_enabled()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
-        Err("Autostart is only available in the Windows build of NexLink.".to_string())
+        autostart_linux::is_enabled()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        Err("Autostart is only available in the Windows and Linux builds of NexLink.".to_string())
     }
 }
 
-/// The "Start with Windows" checkbox: write or delete the Run key value.
+/// The autostart checkbox: register or unregister the exe.
 #[tauri::command]
 fn set_autostart(enabled: bool) -> Result<String, String> {
     #[cfg(windows)]
@@ -511,10 +599,20 @@ fn set_autostart(enabled: bool) -> Result<String, String> {
             "NexLink will no longer start with Windows.".to_string()
         })
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        autostart_linux::set_enabled(enabled)?;
+        Ok(if enabled {
+            "NexLink will start at login. Note: connecting still needs root — start the app with sudo before pressing Connect."
+                .to_string()
+        } else {
+            "NexLink will no longer start at login.".to_string()
+        })
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = enabled;
-        Err("Autostart is only available in the Windows build of NexLink.".to_string())
+        Err("Autostart is only available in the Windows and Linux builds of NexLink.".to_string())
     }
 }
 

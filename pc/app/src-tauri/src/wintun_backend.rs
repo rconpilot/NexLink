@@ -233,3 +233,11 @@ impl WintunDevice {
         }
     }
 }
+
+/// Platform-neutral names for the backend's two types. The Linux TUN
+/// backend (`nxtun`) exports its types under these same names, so
+/// `main.rs` can alias either platform's module as `adapter` and drive
+/// both through one code path (`adapter::Device::open()`,
+/// `adapter::Channels`, `adapter::GATEWAY_ADDRESS`, …).
+pub use WintunChannels as Channels;
+pub use WintunDevice as Device;

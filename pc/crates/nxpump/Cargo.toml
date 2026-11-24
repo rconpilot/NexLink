@@ -5,6 +5,10 @@ edition = "2021"
 license = "MIT"
 description = "Dev harness: binds the NexLink engine to a TUN device (Linux) and an NXLP link. The Windows app embeds the same engine behind Wintun."
 
-[dependencies]
+# Everything is target-gated with the code: nxpump is a Linux-only
+# harness and compiles to a stub on other platforms. The TUN device
+# creation lives in nxtun (the Linux platform layer the tray app also
+# uses); nxpump is its dev harness.
+[target.'cfg(target_os = "linux")'.dependencies]
 nxcore = { path = "../nxcore" }
-libc = "0.2"
+nxtun = { path = "../nxtun" }

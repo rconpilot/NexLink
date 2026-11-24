@@ -2033,6 +2033,7 @@ name = "nexlink-app"
 version = "0.3.1"
 dependencies = [
  "nxcore",
+ "nxtun",
  "tauri",
  "tauri-build",
  "wintun",
@@ -2080,6 +2081,14 @@ name = "nxcore"
 version = "0.3.1"
 dependencies = [
  "smoltcp",
+]
+
+[[package]]
+name = "nxtun"
+version = "0.3.1"
+dependencies = [
+ "libc",
+ "nxcore",
 ]
 
 [[package]]

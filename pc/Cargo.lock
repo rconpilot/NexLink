@@ -110,6 +110,14 @@ dependencies = [
 name = "nxpump"
 version = "0.3.1"
 dependencies = [
+ "nxcore",
+ "nxtun",
+]
+
+[[package]]
+name = "nxtun"
+version = "0.3.1"
+dependencies = [
  "libc",
  "nxcore",
 ]

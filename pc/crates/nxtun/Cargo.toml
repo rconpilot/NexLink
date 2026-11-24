@@ -1,0 +1,13 @@
+[package]
+name = "nxtun"
+version = "0.3.1"
+edition = "2021"
+license = "MIT"
+description = "NexLink Linux platform layer: /dev/net/tun adapter backend + route/DNS management (the Linux counterpart of the Windows Wintun backend)."
+
+# The whole crate is Linux-only; every dependency is target-gated so the
+# crate compiles to an empty shell on other targets and the workspace
+# cross-checks (e.g. x86_64-pc-windows-gnu) stay green.
+[target.'cfg(target_os = "linux")'.dependencies]
+nxcore = { path = "../nxcore" }
+libc = "0.2"

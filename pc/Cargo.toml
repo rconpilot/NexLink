@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/nxcore",
+    "crates/nxtun",
     "crates/nxpump",
     "crates/simphone",
     "crates/e2e",
