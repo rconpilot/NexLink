@@ -125,18 +125,14 @@ checked and tested on this VM.
 
 ## 5. Remaining work
 
-1. **Commit** (two commits, in this order — the tree is uncommitted as of
-   2026-11-24 morning):
-   - *New logo* (approved 2026-11-23): `assets/nexlink-logo*.png`,
-     `android/.../mipmap-*/ic_launcher.png`,
-     `pc/app/src-tauri/icons/*`. Do **not** include the
-     `assets/media-generation-*` byproducts (logo-generation intermediates).
-   - *Linux port + CI*: `pc/crates/nxtun/` (new),
-     `pc/Cargo.toml` (workspace member), `pc/crates/nxpump/*` (cfg-gating
-     + shared `create_tun`), `pc/app/src-tauri/` (`Cargo.toml`,
-     `src/main.rs`, `src/wintun_backend.rs`, `src/autostart_linux.rs`,
-     `tauri.linux.conf.json`), this file, and
-     `.github/workflows/linux.yml` (the Linux CI job).
+1. ✅ **Commit — done 2026-11-24.** Both commits landed, in order: the new
+   logo (`d4be7ac`, `3eec105`, `d805370`; `assets/nexlink-logo*.png`,
+      `android/.../mipmap-*/ic_launcher.png`, `pc/app/src-tauri/icons/*`)
+      and the Linux port + CI (`e307621`: `pc/crates/nxtun/`,
+      `pc/Cargo.toml`, `pc/crates/nxpump/*`, `pc/app/src-tauri/`, this file,
+      `.github/workflows/linux.yml`), plus a CI fix for the new logo's RGBA
+      icons (`c631527`). The `assets/media-generation-*` byproducts were
+      left out, as planned.
 2. **Linux CI** (`.github/workflows/linux.yml`): on `ubuntu-latest` it
    installs the Tauri Linux system deps, runs `cargo check` for the
    workspace, `cargo test -p nxcore -p nxtun`, `bash pc/test-e2e.sh`,
