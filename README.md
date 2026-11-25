@@ -52,6 +52,8 @@ checkbox in the settings window.
 Still to come: the Bluetooth dialer on
 the PC side; see the roadmap in [ARCHITECTURE.md](ARCHITECTURE.md).
 
+**Linux port:** the foundation landed — a TUN backend (`pc/crates/nxtun`), Linux routes/DNS/autostart wiring in the tray app, and a Linux CI job. No live-tunnel test or packaged Linux release yet, so Windows is still the only download. Details: [LINUX_PORT.md](LINUX_PORT.md)
+
 **Running it (Windows):** install from the NSIS installer — the app
 elevates itself via a UAC prompt, because creating the virtual adapter
 and changing routes need administrator rights. (A hand-built exe still
@@ -68,8 +70,10 @@ that, and is a later improvement.
 | `pc/crates/nxcore` | Wire protocol, user-space stack, relay engine (Rust) |
 | `pc/crates/nxpump` | CLI harness that binds the engine to a TUN/Wintun device |
 | `pc/crates/simphone` | A simulated phone relay, used by the end-to-end test |
-| `pc/app` | Windows tray app (Tauri) |
+| `pc/app` | Tray app (Tauri) — Windows; Linux wiring landed (see LINUX_PORT.md) |
 | `android` | Android companion app (Kotlin) |
+| `pc/crates/nxtun` | Linux platform layer: TUN device, routes/DNS, autostart (Rust) |
+| `LINUX_PORT.md` | Linux port status, design, and remaining work |
 
 ## License
 
